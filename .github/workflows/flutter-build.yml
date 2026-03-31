@@ -2377,3 +2377,55 @@ jobs:
           tag_name: ${{ env.TAG_NAME }}
           files: |
             flutter/build/rustdesk-${{ env.VERSION }}-${{ env.RELEASE_NAME }}.tar.gz
+# ---------------------------------------------------------
+  # 置顶任务：删除旧的 Nightly 并重新发布，确保其永远排在 Release 列表最上方
+  # ---------------------------------------------------------
+  finalize-nightly:
+    name: Finalize and Top Nightly Release
+    runs-on: ubuntu-latest
+    if: inputs.upload-artifact == true
+    # 强制等待所有编译 Job 完成
+    needs: 
+      - build-for-windows-flutter
+      - build-for-windows-sciter
+      - build-rustdesk-android
+      - build-rustdesk-android-universal
+      - build-rustdesk-linux
+      - build-rustdesk-linux-sciter
+      - build-for-macOS
+      - build-appimage
+      - build-flatpak
+      - publish_unsigned
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # 下载所有前面 Job 上传的产物
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./all-artifacts
+
+      - name: Recreate Nightly Release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 1. 彻底清除旧的 Nightly 记录和标签
+          echo "Cleaning up old nightly..."
+          gh release delete nightly --yes || true
+          git push origin :refs/tags/nightly || true
+          
+          # 2. 准备文件：将所有分散在子文件夹里的安装包汇聚到根目录
+          echo "Gathering artifacts..."
+          mkdir -p ./dist
+          # 查找所有 exe, msi, apk, dmg, deb, rpm, AppImage, flatpak, zst, tar.gz 文件
+          find ./all-artifacts -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.apk" -o -name "*.dmg" -o -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" -o -name "*.flatpak" -o -name "*.zst" -o -name "*.tar.gz" \) -exec cp {} ./dist/ \;
+          
+          # 3. 创建全新 Nightly（这会刷新 Created At 时间戳，使其置顶）
+          echo "Creating new nightly release..."
+          gh release create nightly \
+            --title "Nightly" \
+            --notes "自编预览版本 | 包含所有平台安装包 | 更新时间: $(date +'%Y-%m-%d %H:%M:%S')" \
+            --prerelease \
+            ./dist/*
