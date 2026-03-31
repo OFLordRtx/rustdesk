@@ -2377,14 +2377,15 @@ jobs:
           tag_name: ${{ env.TAG_NAME }}
           files: |
             flutter/build/rustdesk-${{ env.VERSION }}-${{ env.RELEASE_NAME }}.tar.gz
-# ---------------------------------------------------------
-  # 置顶任务：删除旧的 Nightly 并重新发布，确保其永远排在 Release 列表最上方
+  # ---------------------------------------------------------
+  # 置顶任务：即使上游任务爆红，也要强行删除并重建 Nightly
   # ---------------------------------------------------------
   finalize-nightly:
     name: Finalize and Top Nightly Release
     runs-on: ubuntu-latest
-    if: inputs.upload-artifact == true
-    # 强制等待所有编译 Job 完成
+    # 核心修改：always() 保证即使 build 失败，这个 Job 也会执行
+    # 同时排除掉被手动取消的情况，且必须开启了上传开关
+    if: always() && (cancelled() == false) && (inputs.upload-artifact == true)
     needs: 
       - build-for-windows-flutter
       - build-for-windows-sciter
@@ -2400,7 +2401,7 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # 下载所有前面 Job 上传的产物
+      # 下载所有已成功上传的产物（失败的 Job 不会有产物，此处会自动跳过不存在的）
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -2411,21 +2412,24 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 1. 彻底清除旧的 Nightly 记录和标签
-          echo "Cleaning up old nightly..."
+          # 1. 彻底清除旧的 Nightly 记录和标签 (Clear old release and tag)
+          echo "Force cleaning up old nightly..."
           gh release delete nightly --yes || true
           git push origin :refs/tags/nightly || true
           
-          # 2. 准备文件：将所有分散在子文件夹里的安装包汇聚到根目录
-          echo "Gathering artifacts..."
+          # 2. 汇总现有产物 (Gather existing artifacts)
+          echo "Gathering available artifacts..."
           mkdir -p ./dist
-          # 查找所有 exe, msi, apk, dmg, deb, rpm, AppImage, flatpak, zst, tar.gz 文件
-          find ./all-artifacts -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.apk" -o -name "*.dmg" -o -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" -o -name "*.flatpak" -o -name "*.zst" -o -name "*.tar.gz" \) -exec cp {} ./dist/ \;
+          # 仅拷贝已经成功下载到的文件
+          if [ -d "./all-artifacts" ]; then
+            find ./all-artifacts -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.apk" -o -name "*.dmg" -o -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" -o -name "*.flatpak" -o -name "*.zst" -o -name "*.tar.gz" \) -exec cp {} ./dist/ \;
+          fi
           
-          # 3. 创建全新 Nightly（这会刷新 Created At 时间戳，使其置顶）
-          echo "Creating new nightly release..."
+          # 3. 创建全新 Nightly (Create brand new Nightly to force top)
+          echo "Re-creating nightly to force top position..."
+          # 注意：如果没有文件被编译成功，此处会创建一个空的 Release
           gh release create nightly \
             --title "Nightly" \
-            --notes "自编预览版本 | 包含所有平台安装包 | 更新时间: $(date +'%Y-%m-%d %H:%M:%S')" \
+            --notes "自编预览版本 | 状态: 自动汇总更新 | 时间: $(date +'%Y-%m-%d %H:%M:%S')" \
             --prerelease \
-            ./dist/*
+            ./dist/* || gh release create nightly --title "Nightly" --notes "编译中或部分失败，请稍后刷新" --prerelease
