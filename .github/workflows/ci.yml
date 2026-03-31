@@ -108,7 +108,22 @@ jobs:
     - name: Checkout source code
       uses: actions/checkout@v4
       with:
+        # 这里保持 recursive，先把目录结构拉下来
         submodules: recursive
+
+    - name: Force update hbb_common to my fork
+      shell: bash
+      run: |
+        # 进入子模块目录
+        cd libs/hbb_common
+        # 强制将远程地址设为你自己的 fork
+        git remote set-url origin https://github.com/OFLordRtx/hbb_common.git
+        # 获取你 main 分支的最新内容
+        git fetch origin main
+        # 强制将本地子模块指针指向最新的提交
+        git reset --hard FETCH_HEAD
+        # 返回主目录
+        cd ../..
 
     - name: Install prerequisites
       shell: bash
