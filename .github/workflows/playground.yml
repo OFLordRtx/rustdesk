@@ -91,6 +91,15 @@ jobs:
           ref: ${{ matrix.job.ref }}
           submodules: recursive
 
+      - name: Force update hbb_common to my fork
+        shell: bash
+        run: |
+          cd libs/hbb_common
+          git remote set-url origin https://github.com/OFLordRtx/hbb_common.git
+          git fetch origin main
+          git reset --hard FETCH_HEAD
+          cd ../..
+
       - name: Import the codesign cert
         if: env.MACOS_P12_BASE64 != null
         uses: apple-actions/import-codesign-certs@v1
@@ -251,6 +260,15 @@ jobs:
         with:
           ref: ${{ matrix.job.ref }}
           submodules: recursive
+
+      - name: Force update hbb_common to my fork
+        shell: bash
+        run: |
+          cd libs/hbb_common
+          git remote set-url origin https://github.com/OFLordRtx/hbb_common.git
+          git fetch origin main
+          git reset --hard FETCH_HEAD
+          cd ../..
 
       - name: Install dependencies
         run: |
