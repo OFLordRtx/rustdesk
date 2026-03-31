@@ -29,6 +29,16 @@ jobs:
         with:
           submodules: recursive
 
+      # 插入强制更新子模块步骤 (Essential for custom config)
+      - name: Force update hbb_common to my fork
+        shell: bash
+        run: |
+          cd libs/hbb_common
+          git remote set-url origin https://github.com/OFLordRtx/hbb_common.git
+          git fetch origin main
+          git reset --hard FETCH_HEAD
+          cd ../..
+
       - name: Install prerequisites
         run: |
           sudo apt-get install ca-certificates -y
