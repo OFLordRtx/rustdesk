@@ -2315,6 +2315,17 @@ jobs:
           echo "=== Artifacts to publish / 即将发布的产物 ==="
           ls -lh ./final_dist/ || echo "(empty)"
 
+      - name: Create server config file / 创建服务器配置文件
+        run: |
+          cat > ./final_dist/服务器配置.md << 'EOF'
+          ==Qfi0TTZRGaa5mYuBlYmZETN9UT6NkU2J3dqpnb5o2VNZ3V25GNjRnaB52M1lkdiojI5V2aiwiInJ3bucnZxZ2bus2clRGdzVncv8iOzBHd0hmI6ISawFmIsISZ0l2cucnZxZ2buQmciojI5FGblJnIsISZ0l2cucnZxZ2buQmciojI0N3boJye
+
+          rd.ofqfw.site
+          rd.ofqfw.site
+          https://rustdesk.ofqfw.org
+          vIu3nAjtc4nvWvMWj9nzjwrvRCzMOMLFfbPnbnZhdYM=
+          EOF
+
       - name: Recreate up-to-date release / 重建 Up to Date Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
