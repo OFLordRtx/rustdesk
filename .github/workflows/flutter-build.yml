@@ -2341,5 +2341,4 @@ jobs:
 
           > 仅包含本次成功编译的平台。如某平台缺失，修复后重跑对应 Job，Up to Date 将自动刷新。" \
             --prerelease \
-            --latest \
             ./final_dist/*
