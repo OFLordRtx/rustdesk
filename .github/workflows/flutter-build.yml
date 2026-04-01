@@ -2274,6 +2274,7 @@ jobs:
       - create-backup
       - build-for-windows-flutter
       - build-for-windows-sciter
+      - build-rustdesk-ios
       - build-rustdesk-android
       - build-rustdesk-android-universal
       - build-rustdesk-linux
