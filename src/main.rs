@@ -11,6 +11,18 @@ fn main() {
         eprintln!("Global initialization failed.");
         return;
     }
+    
+    // 硬编码服务器配置，用户无法通过 UI 覆盖
+    // Hardcode server config, user cannot override via UI
+    {
+        use hbb_common::config::{OVERWRITE_SETTINGS, keys};
+        let mut settings = OVERWRITE_SETTINGS.write().unwrap();
+        settings.insert(keys::OPTION_CUSTOM_RENDEZVOUS_SERVER.to_owned(), "rd.ofqfw.site".to_owned());
+        settings.insert(keys::OPTION_RELAY_SERVER.to_owned(), "rd.ofqfw.site".to_owned());
+        settings.insert(keys::OPTION_API_SERVER.to_owned(), "https://rustdesk.ofqfw.org".to_owned());
+        settings.insert(keys::OPTION_KEY.to_owned(), "vIu3nAjtc4nvWvMWj9nzjwrvRCzMOMLFfbPnbnZhdYM=".to_owned());
+    }
+    
     common::test_rendezvous_server();
     common::test_nat_type();
     common::global_clean();
