@@ -8,7 +8,7 @@ on:
         default: true
       upload-tag:
         type: string
-        default: "nightly"
+        default: "up-to-date"   # nightly → up-to-date
 
 # NOTE: F-Droid builder script 'flutter/build_fdroid.sh' reads environment
 # variables from this workflow!
@@ -29,7 +29,7 @@ env:
   ANDROID_FLUTTER_VERSION: "3.24.5"
   # for arm64 linux because official Dart SDK does not work
   FLUTTER_ELINUX_VERSION: "3.16.9"
-  TAG_NAME: "${{ inputs.upload-tag }}"
+  # TAG_NAME: "${{ inputs.upload-tag }}"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   # vcpkg version: 2025.08.27
   # If we change the `VCPKG COMMIT_ID`, please remember:
@@ -48,6 +48,33 @@ env:
   SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}-2"
 
 jobs:
+  # ----------------------------------------------------------------
+  # 统一生成备份 Tag，所有编译 Job 共享同一个时间戳
+  # Generate unified backup tag shared by all build jobs
+  # ----------------------------------------------------------------
+  create-backup:
+    runs-on: ubuntu-latest
+    outputs:
+      backup_tag: ${{ steps.gen.outputs.backup_tag }}
+    steps:
+      - name: Generate and create backup release / 生成并创建备份 Release
+        id: gen
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          export TZ='Asia/Shanghai'
+          TS=$(date +'%Y%m%d-%H%M')
+          TAG="v${{ env.VERSION }}-${TS}-backup"
+          echo "backup_tag=${TAG}" >> $GITHUB_OUTPUT
+
+          # 已存在则跳过，防止并发重复创建 / Skip if already exists
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" 2>/dev/null \
+            || gh release create "$TAG" \
+               --repo "$GITHUB_REPOSITORY" \
+               --title "Backup ${TAG}" \
+               --notes "Workflow run: ${{ github.run_id }}" \
+               --prerelease
+
   generate-bridge:
     uses: ./.github/workflows/bridge.yml
 
@@ -64,7 +91,7 @@ jobs:
 
   build-for-windows-flutter:
     name: ${{ matrix.job.target }}
-    needs: [build-RustDeskTempTopMostWindow, generate-bridge]
+    needs: [build-RustDeskTempTopMostWindow, generate-bridge, create-backup]
     runs-on: ${{ matrix.job.os }}
     strategy:
       fail-fast: false
@@ -83,9 +110,8 @@ jobs:
       - name: Set Release Variables
         shell: bash
         run: |
-          export TZ='Asia/Shanghai'
-          TS=$(date +'%Y%m%d-%H%M')
-          echo "BACKUP_TAG=v${{ env.VERSION }}-$TS" >> $GITHUB_ENV
+           # 从 create-backup Job 读取统一备份 Tag / Read unified tag from create-backup
+          echo "BACKUP_TAG=${{ needs.create-backup.outputs.backup_tag }}" >> $GITHUB_ENV
           
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v6
@@ -297,19 +323,10 @@ jobs:
             ./SignOutput/rustdesk-*.msi
             ./SignOutput/rustdesk-*.exe
 
-      - name: Publish Nightly Release
-        uses: softprops/action-gh-release@v1
-        if: env.UPLOAD_ARTIFACT == 'true'
-        with:
-          prerelease: true
-          tag_name: ${{ env.TAG_NAME }}
-          files: |
-            ./SignOutput/rustdesk-*.msi
-            ./SignOutput/rustdesk-*.exe
-
   # The fallback for the flutter version, we use Sciter for 32bit Windows.
   build-for-windows-sciter:
     name: ${{ matrix.job.target }} (${{ matrix.job.os }})
+    needs: [create-backup]
     runs-on: ${{ matrix.job.os }}
     # Temporarily disable this action due to additional test is needed.
     # if: false
@@ -330,9 +347,8 @@ jobs:
       - name: Set Release Variables
         shell: bash
         run: |
-          export TZ='Asia/Shanghai'
-          TS=$(date +'%Y%m%d-%H%M')
-          echo "BACKUP_TAG=v${{ env.VERSION }}-$TS" >> $GITHUB_ENV
+           # 从 create-backup Job 读取统一备份 Tag / Read unified tag from create-backup
+          echo "BACKUP_TAG=${{ needs.create-backup.outputs.backup_tag }}" >> $GITHUB_ENV
           
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v6
@@ -474,20 +490,11 @@ jobs:
           files: |
             ./SignOutput/rustdesk-*.exe
 
-      - name: Publish Nightly Release
-        uses: softprops/action-gh-release@v1
-        if: env.UPLOAD_ARTIFACT == 'true'
-        with:
-          prerelease: true
-          tag_name: ${{ env.TAG_NAME }}
-          files: |
-            ./SignOutput/rustdesk-*.exe
-
   build-rustdesk-ios:
     if: ${{ inputs.upload-artifact }}
     name: build rustdesk ios ipa
     runs-on: ${{ matrix.job.os }}
-    needs: [generate-bridge]
+    needs: [generate-bridge, create-backup]
     strategy:
       fail-fast: false
       matrix:
@@ -502,9 +509,8 @@ jobs:
       - name: Set Release Variables
         shell: bash
         run: |
-          export TZ='Asia/Shanghai'
-          TS=$(date +'%Y%m%d-%H%M')
-          echo "BACKUP_TAG=v${{ env.VERSION }}-$TS" >> $GITHUB_ENV
+           # 从 create-backup Job 读取统一备份 Tag / Read unified tag from create-backup
+          echo "BACKUP_TAG=${{ needs.create-backup.outputs.backup_tag }}" >> $GITHUB_ENV
           
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v6
@@ -602,36 +608,26 @@ jobs:
           # for easy debugging
           flutter build ipa --release --no-codesign
 
-      # - name: Upload Artifacts
-      #   # if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
-      #   uses: actions/upload-artifact@master
-      #   with:
-      #     name: rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
-      #     path: flutter/build/ios/ipa/*.ipa
+      - name: Upload Artifacts
+        if: env.UPLOAD_ARTIFACT == 'true'
+        uses: actions/upload-artifact@master
+        with:
+          name: rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
+          path: flutter/build/ios/ipa/*.ipa
 
-      # - name: Publish Backup ipa package
-      #   # if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
-      #   uses: softprops/action-gh-release@v1
-      #   with:
-      #     prerelease: true
-      #     tag_name: ${{ env.BACKUP_TAG }}
-      #     files: |
-      #       flutter/build/ios/ipa/*.ipa
-
-      # - name: Publish Nightly ipa package
-      #   # if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
-      #   uses: softprops/action-gh-release@v1
-      #   with:
-      #     prerelease: true
-      #     tag_name: ${{ env.TAG_NAME }}
-      #     files: |
-      #       flutter/build/ios/ipa/*.ipa
-
+      - name: Publish Backup ipa package
+        if: env.UPLOAD_ARTIFACT == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          prerelease: true
+          tag_name: ${{ env.BACKUP_TAG }}
+          files: |
+            flutter/build/ios/ipa/*.ipa
 
   build-for-macOS:
     name: ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
-    needs: [generate-bridge]
+    needs: [generate-bridge, create-backup]
     strategy:
       fail-fast: false
       matrix:
@@ -655,9 +651,8 @@ jobs:
       - name: Set Release Variables
         shell: bash
         run: |
-          export TZ='Asia/Shanghai'
-          TS=$(date +'%Y%m%d-%H%M')
-          echo "BACKUP_TAG=v${{ env.VERSION }}-$TS" >> $GITHUB_ENV
+           # 从 create-backup Job 读取统一备份 Tag / Read unified tag from create-backup
+          echo "BACKUP_TAG=${{ needs.create-backup.outputs.backup_tag }}" >> $GITHUB_ENV
           
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v6
@@ -862,29 +857,20 @@ jobs:
           files: |
             rustdesk*-${{ matrix.job.arch }}.dmg
 
-      - name: Publish Nightly DMG package
-        if: env.UPLOAD_ARTIFACT == 'true'
-        uses: softprops/action-gh-release@v1
-        with:
-          prerelease: true
-          tag_name: ${{ env.TAG_NAME }}
-          files: |
-            rustdesk*-${{ matrix.job.arch }}.dmg
-
   publish_unsigned:
     needs:
       - build-for-macOS
       - build-for-windows-flutter
       - build-for-windows-sciter
+      - create-backup
     runs-on: ubuntu-latest
     if: ${{ inputs.upload-artifact }}
     steps:
       - name: Set Release Variables
         shell: bash
         run: |
-          export TZ='Asia/Shanghai'
-          TS=$(date +'%Y%m%d-%H%M')
-          echo "BACKUP_TAG=v${{ env.VERSION }}-$TS" >> $GITHUB_ENV
+           # 从 create-backup Job 读取统一备份 Tag / Read unified tag from create-backup
+          echo "BACKUP_TAG=${{ needs.create-backup.outputs.backup_tag }}" >> $GITHUB_ENV
           
       - name: Download artifacts
         uses: actions/download-artifact@master
@@ -921,15 +907,8 @@ jobs:
           tag_name: ${{ env.BACKUP_TAG }}
           files: rustdesk-${{ env.VERSION }}-unsigned.tar.gz
 
-      - name: Publish Nightly unsigned app
-        uses: softprops/action-gh-release@v1
-        with:
-          prerelease: true
-          tag_name: ${{ env.TAG_NAME }}
-          files: rustdesk-${{ env.VERSION }}-unsigned.tar.gz
-
   build-rustdesk-android:
-    needs: [generate-bridge]
+    needs: [generate-bridge, create-backup]
     name: build rustdesk android apk ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
     strategy:
@@ -961,9 +940,8 @@ jobs:
       - name: Set Release Variables
         shell: bash
         run: |
-          export TZ='Asia/Shanghai'
-          TS=$(date +'%Y%m%d-%H%M')
-          echo "BACKUP_TAG=v${{ env.VERSION }}-$TS" >> $GITHUB_ENV
+           # 从 create-backup Job 读取统一备份 Tag / Read unified tag from create-backup
+          echo "BACKUP_TAG=${{ needs.create-backup.outputs.backup_tag }}" >> $GITHUB_ENV
           
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
@@ -1227,15 +1205,6 @@ jobs:
           files: |
             ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
 
-      - name: Publish Nightly signed apk package
-        if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
-        uses: softprops/action-gh-release@v1
-        with:
-          prerelease: true
-          tag_name: ${{ env.TAG_NAME }}
-          files: |
-            ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
-
       - name: Publish Backup unsigned apk package
         if: env.ANDROID_SIGNING_KEY == null && env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@v1
@@ -1245,17 +1214,8 @@ jobs:
           files: |
             signed-apk/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
 
-      - name: Publish Nightly unsigned apk package
-        if: env.ANDROID_SIGNING_KEY == null && env.UPLOAD_ARTIFACT == 'true'
-        uses: softprops/action-gh-release@v1
-        with:
-          prerelease: true
-          tag_name: ${{ env.TAG_NAME }}
-          files: |
-            signed-apk/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
-
   build-rustdesk-android-universal:
-    needs: [build-rustdesk-android]
+    needs: [build-rustdesk-android, create-backup]
     name: build rustdesk android universal apk
     if: ${{ inputs.upload-artifact }}
     runs-on: ubuntu-24.04
@@ -1267,9 +1227,8 @@ jobs:
       - name: Set Release Variables
         shell: bash
         run: |
-          export TZ='Asia/Shanghai'
-          TS=$(date +'%Y%m%d-%H%M')
-          echo "BACKUP_TAG=v${{ env.VERSION }}-$TS" >> $GITHUB_ENV
+           # 从 create-backup Job 读取统一备份 Tag / Read unified tag from create-backup
+          echo "BACKUP_TAG=${{ needs.create-backup.outputs.backup_tag }}" >> $GITHUB_ENV
           
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
@@ -1445,15 +1404,6 @@ jobs:
           files: |
             ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
 
-      - name: Publish Nightly signed apk package
-        if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
-        uses: softprops/action-gh-release@v1
-        with:
-          prerelease: true
-          tag_name: ${{ env.TAG_NAME }}
-          files: |
-            ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
-
       - name: Publish Backup unsigned apk package
         if: env.ANDROID_SIGNING_KEY == null && env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@v1
@@ -1463,17 +1413,8 @@ jobs:
           files: |
             signed-apk/rustdesk-${{ env.VERSION }}-universal${{ env.suffix }}.apk
 
-      - name: Publish Nightly unsigned apk package
-        if: env.ANDROID_SIGNING_KEY == null && env.UPLOAD_ARTIFACT == 'true'
-        uses: softprops/action-gh-release@v1
-        with:
-          prerelease: true
-          tag_name: ${{ env.TAG_NAME }}
-          files: |
-            signed-apk/rustdesk-${{ env.VERSION }}-universal${{ env.suffix }}.apk
-
   build-rustdesk-linux:
-    needs: [generate-bridge]
+    needs: [generate-bridge, create-backup]
     name: build rustdesk linux ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.on }}
     strategy:
@@ -1501,9 +1442,8 @@ jobs:
       - name: Set Release Variables
         shell: bash
         run: |
-          export TZ='Asia/Shanghai'
-          TS=$(date +'%Y%m%d-%H%M')
-          echo "BACKUP_TAG=v${{ env.VERSION }}-$TS" >> $GITHUB_ENV
+           # 从 create-backup Job 读取统一备份 Tag / Read unified tag from create-backup
+          echo "BACKUP_TAG=${{ needs.create-backup.outputs.backup_tag }}" >> $GITHUB_ENV
           
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v6
@@ -1790,16 +1730,6 @@ jobs:
             rustdesk-*.deb
             rustdesk-*.rpm
 
-      - name: Publish Nightly debian/rpm package
-        if: env.UPLOAD_ARTIFACT == 'true'
-        uses: softprops/action-gh-release@v1
-        with:
-          prerelease: true
-          tag_name: ${{ env.TAG_NAME }}
-          files: |
-            rustdesk-*.deb
-            rustdesk-*.rpm
-
       - name: Upload deb
         uses: actions/upload-artifact@master
         if: env.UPLOAD_ARTIFACT == 'true'
@@ -1835,19 +1765,11 @@ jobs:
           files: |
             res/rustdesk-${{ env.VERSION }}*.zst
 
-      - name: Publish Nightly archlinux package
-        if: matrix.job.arch == 'x86_64' && env.UPLOAD_ARTIFACT == 'true'
-        uses: softprops/action-gh-release@v1
-        with:
-          prerelease: true
-          tag_name: ${{ env.TAG_NAME }}
-          files: |
-            res/rustdesk-${{ env.VERSION }}*.zst
-
   build-rustdesk-linux-sciter:
     if: ${{ inputs.upload-artifact }}
     runs-on: ${{ matrix.job.on }}
     name: build-rustdesk-linux-sciter ${{ matrix.job.target }}
+    needs: [create-backup]
     strategy:
       fail-fast: false
       matrix:
@@ -1877,9 +1799,8 @@ jobs:
       - name: Set Release Variables
         shell: bash
         run: |
-          export TZ='Asia/Shanghai'
-          TS=$(date +'%Y%m%d-%H%M')
-          echo "BACKUP_TAG=v${{ env.VERSION }}-$TS" >> $GITHUB_ENV
+           # 从 create-backup Job 读取统一备份 Tag / Read unified tag from create-backup
+          echo "BACKUP_TAG=${{ needs.create-backup.outputs.backup_tag }}" >> $GITHUB_ENV
           
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v6
@@ -2080,15 +2001,6 @@ jobs:
           files: |
             rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.deb
 
-      - name: Publish Nightly debian package
-        if: env.UPLOAD_ARTIFACT == 'true'
-        uses: softprops/action-gh-release@v1
-        with:
-          prerelease: true
-          tag_name: ${{ env.TAG_NAME }}
-          files: |
-            rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.deb
-
       - name: Upload deb
         uses: actions/upload-artifact@master
         if: env.UPLOAD_ARTIFACT == 'true'
@@ -2098,7 +2010,7 @@ jobs:
 
   build-appimage:
     name: Build appimage ${{ matrix.job.target }}
-    needs: [build-rustdesk-linux]
+    needs: [build-rustdesk-linux, create-backup]
     runs-on: ubuntu-22.04
     if: ${{ inputs.upload-artifact }}
     strategy:
@@ -2111,9 +2023,8 @@ jobs:
       - name: Set Release Variables
         shell: bash
         run: |
-          export TZ='Asia/Shanghai'
-          TS=$(date +'%Y%m%d-%H%M')
-          echo "BACKUP_TAG=v${{ env.VERSION }}-$TS" >> $GITHUB_ENV
+           # 从 create-backup Job 读取统一备份 Tag / Read unified tag from create-backup
+          echo "BACKUP_TAG=${{ needs.create-backup.outputs.backup_tag }}" >> $GITHUB_ENV
           
       - name: Checkout source code
         uses: actions/checkout@v4
@@ -2162,20 +2073,12 @@ jobs:
           files: |
             ./appimage/rustdesk-${{ env.VERSION }}-*.AppImage
 
-      - name: Publish Nightly appimage package
-        if: env.UPLOAD_ARTIFACT == 'true'
-        uses: softprops/action-gh-release@v1
-        with:
-          prerelease: true
-          tag_name: ${{ env.TAG_NAME }}
-          files: |
-            ./appimage/rustdesk-${{ env.VERSION }}-*.AppImage
-
   build-flatpak:
     name: Build flatpak ${{ matrix.job.target }}${{ matrix.job.suffix }}
     needs:
       - build-rustdesk-linux
       - build-rustdesk-linux-sciter
+      - create-backup
     runs-on: ${{ matrix.job.on }}
     if: ${{ inputs.upload-artifact }}
     strategy:
@@ -2209,9 +2112,8 @@ jobs:
       - name: Set Release Variables
         shell: bash
         run: |
-          export TZ='Asia/Shanghai'
-          TS=$(date +'%Y%m%d-%H%M')
-          echo "BACKUP_TAG=v${{ env.VERSION }}-$TS" >> $GITHUB_ENV
+           # 从 create-backup Job 读取统一备份 Tag / Read unified tag from create-backup
+          echo "BACKUP_TAG=${{ needs.create-backup.outputs.backup_tag }}" >> $GITHUB_ENV
           
       - name: Checkout source code
         uses: actions/checkout@v4
@@ -2272,18 +2174,11 @@ jobs:
           files: |
             flatpak/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.flatpak
 
-      - name: Publish Nightly flatpak package
-        uses: softprops/action-gh-release@v1
-        with:
-          prerelease: true
-          tag_name: ${{ env.TAG_NAME }}
-          files: |
-            flatpak/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.flatpak
-
   build-rustdesk-web:
     if: False
     name: build-rustdesk-web
     runs-on: ubuntu-22.04
+    needs: [create-backup]
     permissions:
       contents: read
     strategy:
@@ -2294,9 +2189,8 @@ jobs:
       - name: Set Release Variables
         shell: bash
         run: |
-          export TZ='Asia/Shanghai'
-          TS=$(date +'%Y%m%d-%H%M')
-          echo "BACKUP_TAG=v${{ env.VERSION }}-$TS" >> $GITHUB_ENV
+           # 从 create-backup Job 读取统一备份 Tag / Read unified tag from create-backup
+          echo "BACKUP_TAG=${{ needs.create-backup.outputs.backup_tag }}" >> $GITHUB_ENV
           
       - name: Checkout source code
         uses: actions/checkout@v4
@@ -2369,24 +2263,15 @@ jobs:
           files: |
             flutter/build/rustdesk-${{ env.VERSION }}-${{ env.RELEASE_NAME }}.tar.gz
 
-      - name: Publish Nightly web
-        if: env.UPLOAD_ARTIFACT == 'true'
-        uses: softprops/action-gh-release@v1
-        with:
-          prerelease: true
-          tag_name: ${{ env.TAG_NAME }}
-          files: |
-            flutter/build/rustdesk-${{ env.VERSION }}-${{ env.RELEASE_NAME }}.tar.gz
-  # ---------------------------------------------------------
-  # 置顶任务：即使上游任务爆红，也要强行删除并重建 Nightly
-  # ---------------------------------------------------------
-  finalize-nightly:
-    name: Finalize and Top Nightly Release
+  # ----------------------------------------------------------------
+  # 原子化汇总：所有 Job 结束后，从备份 Tag 捞包重建 Up to Date Release
+  # Atomic finalize: rebuild Up to Date release from backup tag
+  # ----------------------------------------------------------------
+  finalize-up-to-date:
+    name: Finalize Up to Date Release
     runs-on: ubuntu-latest
-    # 核心修改：always() 保证即使 build 失败，这个 Job 也会执行
-    # 同时排除掉被手动取消的情况，且必须开启了上传开关
-    if: always() && (cancelled() == false) && (inputs.upload-artifact == true)
-    needs: 
+    needs:
+      - create-backup
       - build-for-windows-flutter
       - build-for-windows-sciter
       - build-rustdesk-android
@@ -2397,39 +2282,60 @@ jobs:
       - build-appimage
       - build-flatpak
       - publish_unsigned
+    # create-backup 必须成功；其余 Job 无论成败都继续；不处理手动取消
+    # create-backup must succeed; other jobs may fail; skip if cancelled
+    if: always() && cancelled() == false && needs.create-backup.result == 'success' && inputs.upload-artifact == true
     steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
-
-      # 下载所有已成功上传的产物（失败的 Job 不会有产物，此处会自动跳过不存在的）
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: ./all-artifacts
-
-      - name: Recreate Nightly Release
-        shell: bash
+      - name: Delete old up-to-date release / 删除旧的 Up to Date Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 1. 彻底清除旧的 Nightly 记录和标签 (Clear old release and tag)
-          echo "Force cleaning up old nightly..."
-          gh release delete nightly --yes || true
-          git push origin :refs/tags/nightly || true
-          
-          # 2. 汇总现有产物 (Gather existing artifacts)
-          echo "Gathering available artifacts..."
-          mkdir -p ./dist
-          # 仅拷贝已经成功下载到的文件
-          if [ -d "./all-artifacts" ]; then
-            find ./all-artifacts -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.apk" -o -name "*.dmg" -o -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" -o -name "*.flatpak" -o -name "*.zst" -o -name "*.tar.gz" \) -exec cp {} ./dist/ \;
+          # --cleanup-tag 同时删除 Release 和 Tag
+          # --cleanup-tag removes both release and tag
+          gh release delete up-to-date \
+            --repo "$GITHUB_REPOSITORY" \
+            --yes \
+            --cleanup-tag \
+            || echo "up-to-date release not found, skipping deletion."
+
+      - name: Download all artifacts from backup tag / 从备份 Tag 捞取全量产物
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BACKUP_TAG: ${{ needs.create-backup.outputs.backup_tag }}
+        run: |
+          mkdir -p ./final_dist
+          gh release download "$BACKUP_TAG" \
+            --dir ./final_dist \
+            --repo "$GITHUB_REPOSITORY" \
+            || echo "Warning: no artifacts found in backup tag."
+
+          echo "=== Artifacts to publish / 即将发布的产物 ==="
+          ls -lh ./final_dist/ || echo "(empty)"
+
+      - name: Recreate up-to-date release / 重建 Up to Date Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BACKUP_TAG: ${{ needs.create-backup.outputs.backup_tag }}
+        run: |
+          COUNT=$(ls ./final_dist 2>/dev/null | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "No artifacts to publish, all jobs may have failed."
+            exit 0
           fi
-          
-          # 3. 创建全新 Nightly (Create brand new Nightly to force top)
-          echo "Re-creating nightly to force top position..."
-          # 注意：如果没有文件被编译成功，此处会创建一个空的 Release
-          gh release create nightly \
-            --title "Nightly" \
-            --notes "自编预览版本 | 状态: 自动汇总更新 | 时间: $(date +'%Y-%m-%d %H:%M:%S')" \
+
+          gh release create up-to-date \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Up to Date" \
+            --notes "### 自动构建发布
+
+          | 字段 | 值 |
+          |------|----|
+          | 版本 | \`${{ env.VERSION }}\` |
+          | 备份 Tag | \`${BACKUP_TAG}\` |
+          | 更新时间 | $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S') CST |
+          | 成功平台 | ${COUNT} 个安装包 |
+          | Workflow | [Run #${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+
+          > 仅包含本次成功编译的平台。如某平台缺失，修复后重跑对应 Job，Up to Date 将自动刷新。" \
             --prerelease \
-            ./dist/* || gh release create nightly --title "Nightly" --notes "编译中或部分失败，请稍后刷新" --prerelease
+            ./final_dist/*
