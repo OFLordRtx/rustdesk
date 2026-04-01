@@ -64,10 +64,12 @@ jobs:
         run: |
           export TZ='Asia/Shanghai'
           TS=$(date +'%Y%m%d-%H%M')
-          TAG="v${{ env.VERSION }}-${TS}-backup"
+          # 【修改点】去掉开头的 v，改用 backup- 前缀，避开 GitHub 的 SemVer 自动排序
+          # [Change] Remove leading 'v', use 'backup-' prefix to bypass GitHub SemVer sorting
+          TAG="backup-v${{ env.VERSION }}-${TS}"
           echo "backup_tag=${TAG}" >> $GITHUB_OUTPUT
 
-          # 已存在则跳过，防止并发重复创建 / Skip if already exists
+          # 已存在则跳过 / Skip if already exists
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" 2>/dev/null \
             || gh release create "$TAG" \
                --repo "$GITHUB_REPOSITORY" \
@@ -2339,4 +2341,5 @@ jobs:
 
           > 仅包含本次成功编译的平台。如某平台缺失，修复后重跑对应 Job，Up to Date 将自动刷新。" \
             --prerelease \
+            --latest \
             ./final_dist/*
